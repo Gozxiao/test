@@ -318,7 +318,8 @@ def cancel_build(sentinel):
         if records and all('running' not in r['Status'].lower() for r in records):break
         time.sleep(.5)
     assert len(records)==1,records
-    logs=run('docker','buildx','history','logs',records[0]['ID'])
+    # ls JSON contains builder/node/ref; this engine's logs command expects Ref().
+    logs=run('docker','buildx','history','logs',records[0]['ID'].rsplit('/',1)[-1])
     Path('/tmp/r3b-buildkit-cancel.log').write_text(logs)
     assert re.search(r'(?m)^#\d+\s+[0-9.]+\s+R3_CANCEL_STARTED\s*$',logs),logs
     assert not re.search(r'(?m)^#\d+\s+[0-9.]+\s+R3_CANCEL_COMPLETED\s*$',logs),logs
