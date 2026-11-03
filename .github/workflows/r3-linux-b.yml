@@ -1,11 +1,6 @@
 name: R3 isolated Linux B (synthetic only)
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/r3-linux-b.yml'
-      - 'r3/**'
-      - 'test/**'
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:

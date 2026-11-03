@@ -6,24 +6,44 @@ import controller
 
 
 class ImageIdentity(unittest.TestCase):
-    def test_classic_null_descriptor_uses_config_lookup(self):
+    def test_classic_null_descriptor_uses_recorded_name_and_checks_config(self):
         config = 'sha256:' + 'a' * 64
         seen = []
         def call(*args):
             seen.append(args)
-            return json.dumps({'Image':config, 'ImageManifestDescriptor':None} if '--type' in args
+            return json.dumps({'Image':config, 'Config':{'Image':'site:old'}, 'ImageManifestDescriptor':None} if '--type' in args
                 else {'Id':config, 'Os':'linux', 'Architecture':'amd64'})
         self.assertEqual(executor.running_image(call, 'container'), (config, config, None))
-        self.assertEqual(seen[-1][-1], config)
+        self.assertEqual(seen[-1][-1], 'site:old')
 
-    def test_containerd_resolves_manifest_without_looking_up_config(self):
+    def test_docker29_uses_addressable_name_not_unaddressable_child(self):
         config, manifest, platform_id = ['sha256:' + c*64 for c in 'abc']
         descriptor = {'digest':manifest, 'mediaType':'application/vnd.oci.image.manifest.v1+json'}
         def call(*args):
-            if '--type' in args:return json.dumps({'Image':config, 'ImageManifestDescriptor':descriptor})
-            self.assertEqual(args[-1], manifest)
-            return json.dumps({'Id':platform_id,'Os':'linux','Architecture':'amd64'})
+            if '--type' in args:return json.dumps({'Image':config, 'Config':{'Image':'site:old'}, 'ImageManifestDescriptor':descriptor})
+            self.assertEqual(args[-1], 'site:old')
+            return json.dumps({'Id':platform_id,'Os':'linux','Architecture':'amd64','Descriptor':descriptor})
         self.assertEqual(executor.running_image(call, 'container'), (platform_id, config, descriptor))
+
+    def test_docker29_retargeted_name_fails_despite_valid_ids(self):
+        old,new=['sha256:'+c*64 for c in 'ab']
+        def call(*args):
+            if '--type' in args:return json.dumps({'Image':old,'Config':{'Image':'site:old'},
+                'ImageManifestDescriptor':{'digest':old,'mediaType':'application/vnd.oci.image.manifest.v1+json'}})
+            self.assertEqual(args[-1],'site:old')
+            return json.dumps({'Id':new,'Os':'linux','Architecture':'amd64',
+                'Descriptor':{'digest':new,'mediaType':'application/vnd.oci.image.manifest.v1+json'}})
+        with self.assertRaisesRegex(RuntimeError,'running manifest'):executor.running_image(call,'container')
+
+    def test_classic_retargeted_name_fails(self):
+        def call(*args):
+            return json.dumps({'Image':'sha256:'+'a'*64,'Config':{'Image':'site:old'}} if '--type' in args
+                else {'Id':'sha256:'+'b'*64,'Os':'linux','Architecture':'amd64'})
+        with self.assertRaisesRegex(RuntimeError,'running config'):executor.running_image(call,'container')
+
+    def test_missing_recorded_name_is_not_a_digest_fallback(self):
+        with self.assertRaisesRegex(RuntimeError,'recorded image reference'):
+            executor.running_image(lambda *a:json.dumps({'Image':'sha256:'+'a'*64}),'container')
 
     def test_invalid_ids_and_platform_fail_closed(self):
         for obj in ({'Id':None,'Os':'linux','Architecture':'amd64'},
@@ -42,7 +62,7 @@ class ImageIdentity(unittest.TestCase):
     def test_invalid_descriptor_is_not_a_classic_fallback(self):
         for desc in ({}, {'digest':'not-a-digest','mediaType':'application/vnd.oci.image.manifest.v1+json'}):
             with self.assertRaises(RuntimeError):
-                executor.running_image(lambda *a:json.dumps({'Image':'sha256:'+'a'*64,'ImageManifestDescriptor':desc}), 'container')
+                executor.running_image(lambda *a:json.dumps({'Image':'sha256:'+'a'*64,'Config':{'Image':'site:old'},'ImageManifestDescriptor':desc}), 'container')
 
     def test_new_receipt_id_is_authoritative_over_legacy_manifest(self):
         result={'status':'ready','target_sha':'a'*40,'checkout_sha':'a'*40,

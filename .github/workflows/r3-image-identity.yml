@@ -1,0 +1,21 @@
+name: R3 Docker29 named-image identity regression
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/r3-image-identity.yml'
+      - 'r3/**'
+permissions:
+  contents: read
+jobs:
+  named-image-identity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Focused classic and Docker29 metadata regressions only
+        env:
+          PYTHONPATH: r3
+        run: python3 -B -m unittest test_image_identity test_release.Executor -v

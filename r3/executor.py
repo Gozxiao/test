@@ -55,7 +55,7 @@ def digest(value):
     return value
 
 
-def platform_image(call, reference):
+def platform_image(call, reference, expected_manifest=None):
     image = json.loads(call('docker', 'image', 'inspect', '--format', '{{json .}}', reference))
     # Classic stores contain one platform and older engines lack --platform.
     # Multi-platform stores must explicitly resolve their selected platform.
@@ -63,6 +63,13 @@ def platform_image(call, reference):
         image = json.loads(call('docker', 'image', 'inspect', '--platform', 'linux/amd64', '--format', '{{json .}}', reference))
     if image.get('Os') != 'linux' or image.get('Architecture') != 'amd64':
         raise RuntimeError('unexpected image platform')
+    if expected_manifest is not None:
+        descriptor = image.get('Descriptor')
+        if (not isinstance(descriptor, dict) or descriptor.get('mediaType') not in (
+                'application/vnd.oci.image.manifest.v1+json',
+                'application/vnd.docker.distribution.manifest.v2+json')
+                or digest(descriptor.get('digest')) != expected_manifest):
+            raise RuntimeError('named image no longer matches running manifest')
     # Docker's immutable platform ID, never compared directly with an OCI digest.
     return digest(image.get('Id'))
 
@@ -70,17 +77,22 @@ def platform_image(call, reference):
 def running_image(call, cid):
     container = json.loads(call('docker', 'inspect', '--type', 'container', '--format', '{{json .}}', cid))
     image_id = digest(container.get('Image'))
+    reference = container.get('Config', {}).get('Image')
+    if not isinstance(reference, str) or not reference or reference.startswith('-'):
+        raise RuntimeError('missing or invalid recorded image reference')
     descriptor = container.get('ImageManifestDescriptor')
     if descriptor is not None:
         if not isinstance(descriptor, dict) or descriptor.get('mediaType') not in (
                 'application/vnd.oci.image.manifest.v1+json',
                 'application/vnd.docker.distribution.manifest.v2+json'):
             raise RuntimeError('invalid running image manifest descriptor')
-        reference = digest(descriptor.get('digest'))
+        actual = platform_image(call, reference, digest(descriptor.get('digest')))
     else:
-        # Classic Docker has no manifest descriptor; Image is its config ID.
-        reference = image_id
-    return platform_image(call, reference), image_id, descriptor
+        # Classic Docker: compare the two config IDs, not an OCI manifest digest.
+        actual = platform_image(call, reference)
+        if actual != image_id:
+            raise RuntimeError('named image no longer matches running config')
+    return actual, image_id, descriptor
 
 
 def publish(sha, delivery, run=command, get=None, resource_check=check_resources):
@@ -126,14 +138,14 @@ def publish(sha, delivery, run=command, get=None, resource_check=check_resources
             cid = run(compose + ['ps', '-q', name], env)
             actual, container_image, descriptor = running_image(call, cid)
             reference = call('docker', 'inspect', '--format', '{{.Config.Image}}', cid)
-            index = digest(call('docker', 'image', 'inspect', '--format', '{{.Id}}', reference))
-            if platform_image(call, index) != actual:
+            reference_id = digest(call('docker', 'image', 'inspect', '--format', '{{.Id}}', reference))
+            if platform_image(call, reference) != actual:
                 raise RuntimeError('baseline reference no longer matches running container')
             tag = 'personal-site-' + name + ':baseline-' + delivery
-            call('docker', 'image', 'tag', index, tag)
+            call('docker', 'image', 'tag', reference, tag)
             if platform_image(call, tag) != actual:
                 raise RuntimeError('baseline tag identity mismatch')
-            receipt['baseline'][name] = {'index': index, 'image_id': actual,
+            receipt['baseline'][name] = {'reference': reference, 'reference_id': reference_id, 'image_id': actual,
                 'container_image': container_image, 'descriptor': descriptor, 'tag': tag, 'source_sha': None}
         receipt['stage'] = 'build'
         resource_check()
