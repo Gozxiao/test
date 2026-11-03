@@ -1,1 +1,9 @@
-# test
+# Gozxiao R3 — isolated Linux B acceptance
+
+This **public test-only** repository contains a minimal copy of the reviewed R3 site release controller/executor, a synthetic Docker site and one CI workflow. It is not a website release and is not connected to the real Gozxiao production webhook, Vercel, GitHub main repository, secrets or user data.
+
+The workflow runs once when the B test files change on the **public test** `main` branch. It requires a GitHub-hosted Ubuntu 24.04 VM with real PID 1 systemd and its own Docker daemon. It refuses to start on an existing/foreign `/root/personal-site`, controller install, ledger or site-data volume. It uses only an ephemeral local Git origin, synthetic HMAC and synthetic website + volume sentinel.
+
+The HTTP verification uses a synthetic trusted HTTPS server on the runner and a local `/etc/hosts` mapping of `gozxiao.win` to `127.0.0.1`—it does **not** make real requests to the production website. It verifies real HTTPS/TLS and local asset correctness, **not** CDN, WAF, public DNS or production ingress. Therefore passing the core workflow cannot be reported as full production acceptance. It does not deliberately exhaust runner disk/RAM; resource pressure and BuildKit daemon-side cancellation remain separate unverified acceptance items unless evidenced by additional tests.
+
+Original R3 files are copied byte-for-byte from the archived R3 candidate package; synthetic test code is separate. The generated run evidence has no real credentials. Do not use any part of this repository as a production deployment package. Do not rerun or schedule without reviewing the public CI logs, limits and current usage.

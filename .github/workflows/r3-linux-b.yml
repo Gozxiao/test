@@ -1,0 +1,36 @@
+name: R3 isolated Linux B (synthetic only)
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/r3-linux-b.yml'
+      - 'r3/**'
+      - 'test/**'
+permissions:
+  contents: read
+concurrency:
+  group: r3-linux-b-synthetic
+  cancel-in-progress: false
+jobs:
+  real-docker-systemd:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify hosted runner and run synthetic real-runtime acceptance
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          RUNNER_LABELS_JSON: '["ubuntu-24.04"]'
+        run: |
+          set -euo pipefail
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_LABELS_JSON python3 test/b_acceptance.py
+      - name: Preserve synthetic evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r3-b-synthetic-evidence
+          path: /tmp/r3b-result.json
+          if-no-files-found: warn
+          retention-days: 7
