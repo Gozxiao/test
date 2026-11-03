@@ -327,6 +327,12 @@ def main():
         print('R3_LINUX_B_CORE_PASS: real Docker replacement, real systemd persistence, real rollback, synthetic volume.',flush=True)
     except Exception as e:
         print('R3_LINUX_B_NOT_PASS: '+repr(e),flush=True)
+        # This VM contains only our synthetic site; collect actual failure evidence.
+        for cid in run('docker','ps','-aq','--filter','label=com.docker.compose.project=personal-site').splitlines():
+            state=run('docker','inspect','--format','{{json .State}}',cid)
+            print('R3B_SYNTHETIC_CONTAINER_STATE='+state,flush=True)
+            p=subprocess.run(['docker','logs','--tail','20',cid],capture_output=True,text=True)
+            print('R3B_SYNTHETIC_CONTAINER_LOG='+p.stdout+p.stderr,flush=True)
         # Do not hide server journal diagnostics; never output synthetic secrets.
         try:
             print('R3_SYSTEMD_STATUS='+run('systemctl','is-active',UNIT),flush=True)
