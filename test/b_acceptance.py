@@ -294,10 +294,16 @@ def exercise():
     cancel_build(sentinel)
 
 
+def build_history():
+    text=run('docker','buildx','history','ls','--format','json')
+    # Buildx versions emit either a JSON array or one record per line.
+    return json.loads(text) if text.lstrip().startswith('[') else [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
 def cancel_build(sentinel):
     context=Path('/tmp/r3b-cancel');context.mkdir()
     (context/'Dockerfile').write_text('FROM python:3.12-alpine\nRUN echo R3_CANCEL_STARTED; sleep 45; echo R3_CANCEL_COMPLETED\n')
-    before={r['ID'] for r in json.loads(run('docker','buildx','history','ls','--format','json'))}
+    before={r['ID'] for r in build_history()}
     sys.path.insert(0,str(INSTALL))
     import controller
     child_code="import sys;sys.path.insert(0,"+repr(str(INSTALL))+");import executor;executor.command(['docker','buildx','build','--no-cache','--progress=plain','--load','-t','r3b-cancel:never-ready',"+repr(str(context))+"],executor.clean_environment())"
@@ -305,7 +311,7 @@ def cancel_build(sentinel):
     except TimeoutError:pass
     else:raise RuntimeError('slow synthetic build was not interrupted')
     for _ in range(30):
-        records=[r for r in json.loads(run('docker','buildx','history','ls','--format','json')) if r['ID'] not in before]
+        records=[r for r in build_history() if r['ID'] not in before]
         if records and all('running' not in r['Status'].lower() for r in records):break
         time.sleep(.5)
     assert len(records)==1,records
