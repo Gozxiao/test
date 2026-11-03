@@ -297,7 +297,10 @@ def exercise():
 def build_history():
     text=run('docker','buildx','history','ls','--format','json')
     # Buildx versions emit either a JSON array or one record per line.
-    return json.loads(text) if text.lstrip().startswith('[') else [json.loads(line) for line in text.splitlines() if line.strip()]
+    rows=json.loads(text) if text.lstrip().startswith('[') else [json.loads(line) for line in text.splitlines() if line.strip()]
+    # Current Buildx MarshalJSON uses ref/status; older documented output used ID/Status.
+    return [{'ID':r['ref'] if 'ref' in r else r['ID'],
+             'Status':r['status'] if 'status' in r else r['Status'], 'raw':r} for r in rows]
 
 
 def cancel_build(sentinel):
