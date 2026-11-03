@@ -319,7 +319,9 @@ def cancel_build(sentinel):
         time.sleep(.5)
     assert len(records)==1,records
     # ls JSON contains builder/node/ref; this engine's logs command expects Ref().
-    logs=run('docker','buildx','history','logs',records[0]['ID'].rsplit('/',1)[-1])
+    # Official Buildx progress printer writes historical logs to stderr.
+    output=subprocess.run(['docker','buildx','history','logs',records[0]['ID'].rsplit('/',1)[-1]],capture_output=True,text=True,timeout=30)
+    logs=output.stdout+output.stderr
     Path('/tmp/r3b-buildkit-cancel.log').write_text(logs)
     assert re.search(r'(?m)^#\d+\s+[0-9.]+\s+R3_CANCEL_STARTED\s*$',logs),logs
     assert not re.search(r'(?m)^#\d+\s+[0-9.]+\s+R3_CANCEL_COMPLETED\s*$',logs),logs
