@@ -86,7 +86,7 @@ class H(BaseHTTPRequestHandler):
   self.send_response(200);self.end_headers();self.wfile.write(b'ok')
 HTTPServer(('0.0.0.0',8000),H).serve_forever()
 ''')
-    (path/'web'/'Dockerfile').write_text('FROM nginx:alpine\nARG RELEASE_TAG\nLABEL ci.synthetic_sha=$RELEASE_TAG\nCOPY index.html /usr/share/nginx/html/index.html\nCOPY assets/ /usr/share/nginx/html/assets/\n')
+    (path/'web'/'Dockerfile').write_text('FROM nginx:alpine\nARG RELEASE_TAG\nLABEL ci.synthetic_sha=$RELEASE_TAG\nCOPY index.html /usr/share/nginx/html/index.html\nCOPY assets/ /usr/share/nginx/html/assets/\nRUN chmod -R a+rX /usr/share/nginx/html\n')
     (path/'web'/'index.html').write_text(f'<!doctype html><html><head><title>synthetic {version}</title></head><body><h1>R3 {version}</h1><script src="/assets/app.js"></script></body></html>\n')
     (path/'web'/'assets'/'app.js').write_text(f'window.R3_SYNTHETIC_VERSION={version!r};\n')
     (path/'compose.yaml').write_text('''name: personal-site
