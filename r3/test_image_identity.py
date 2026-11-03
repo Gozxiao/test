@@ -30,6 +30,15 @@ class ImageIdentity(unittest.TestCase):
                     {'Id':'sha256:'+'a'*64,'Os':'linux','Architecture':'arm64'}):
             with self.assertRaises(RuntimeError):executor.platform_image(lambda *a:json.dumps(obj), 'ref')
 
+    def test_multi_platform_store_is_explicitly_selected(self):
+        seen=[]
+        def call(*args):
+            seen.append(args)
+            return json.dumps({'Id':'sha256:'+('b' if '--platform' in args else 'a')*64,
+                'Descriptor':{'digest':'sha256:'+'c'*64},'Os':'linux','Architecture':'amd64'})
+        self.assertEqual(executor.platform_image(call, 'ref'), 'sha256:'+'b'*64)
+        self.assertEqual(len(seen),2);self.assertIn('--platform',seen[-1])
+
     def test_invalid_descriptor_is_not_a_classic_fallback(self):
         for desc in ({}, {'digest':'not-a-digest','mediaType':'application/vnd.oci.image.manifest.v1+json'}):
             with self.assertRaises(RuntimeError):

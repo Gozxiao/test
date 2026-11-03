@@ -56,7 +56,11 @@ def digest(value):
 
 
 def platform_image(call, reference):
-    image = json.loads(call('docker', 'image', 'inspect', '--platform', 'linux/amd64', '--format', '{{json .}}', reference))
+    image = json.loads(call('docker', 'image', 'inspect', '--format', '{{json .}}', reference))
+    # Classic stores contain one platform and older engines lack --platform.
+    # Multi-platform stores must explicitly resolve their selected platform.
+    if image.get('Descriptor') is not None:
+        image = json.loads(call('docker', 'image', 'inspect', '--platform', 'linux/amd64', '--format', '{{json .}}', reference))
     if image.get('Os') != 'linux' or image.get('Architecture') != 'amd64':
         raise RuntimeError('unexpected image platform')
     # Docker's immutable platform ID, never compared directly with an OCI digest.
