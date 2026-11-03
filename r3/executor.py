@@ -49,6 +49,36 @@ def command(args, env):
         return output.read().decode('utf-8').strip()
 
 
+def digest(value):
+    if not isinstance(value, str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', value):
+        raise RuntimeError('missing or invalid immutable image identity')
+    return value
+
+
+def platform_image(call, reference):
+    image = json.loads(call('docker', 'image', 'inspect', '--platform', 'linux/amd64', '--format', '{{json .}}', reference))
+    if image.get('Os') != 'linux' or image.get('Architecture') != 'amd64':
+        raise RuntimeError('unexpected image platform')
+    # Docker's immutable platform ID, never compared directly with an OCI digest.
+    return digest(image.get('Id'))
+
+
+def running_image(call, cid):
+    container = json.loads(call('docker', 'inspect', '--type', 'container', '--format', '{{json .}}', cid))
+    image_id = digest(container.get('Image'))
+    descriptor = container.get('ImageManifestDescriptor')
+    if descriptor is not None:
+        if not isinstance(descriptor, dict) or descriptor.get('mediaType') not in (
+                'application/vnd.oci.image.manifest.v1+json',
+                'application/vnd.docker.distribution.manifest.v2+json'):
+            raise RuntimeError('invalid running image manifest descriptor')
+        reference = digest(descriptor.get('digest'))
+    else:
+        # Classic Docker has no manifest descriptor; Image is its config ID.
+        reference = image_id
+    return platform_image(call, reference), image_id, descriptor
+
+
 def publish(sha, delivery, run=command, get=None, resource_check=check_resources):
     if not re.fullmatch('[0-9a-f]{40}', sha) or sha == '0' * 40 or not re.fullmatch('[A-Za-z0-9-]{1,100}', delivery):
         raise ValueError('exact SHA and delivery required')
@@ -90,14 +120,17 @@ def publish(sha, delivery, run=command, get=None, resource_check=check_resources
         receipt['baseline'] = {}
         for name in ('backend', 'web'):
             cid = run(compose + ['ps', '-q', name], env)
-            manifest = json.loads(call('docker', 'inspect', '--format', '{{json .ImageManifestDescriptor}}', cid))['digest']
+            actual, container_image, descriptor = running_image(call, cid)
             reference = call('docker', 'inspect', '--format', '{{.Config.Image}}', cid)
-            index = call('docker', 'image', 'inspect', '--format', '{{.Id}}', reference)
-            if call('docker', 'image', 'inspect', '--platform', 'linux/amd64', '--format', '{{.Id}}', index) != manifest:
+            index = digest(call('docker', 'image', 'inspect', '--format', '{{.Id}}', reference))
+            if platform_image(call, index) != actual:
                 raise RuntimeError('baseline reference no longer matches running container')
             tag = 'personal-site-' + name + ':baseline-' + delivery
             call('docker', 'image', 'tag', index, tag)
-            receipt['baseline'][name] = {'index': index, 'manifest': manifest, 'tag': tag, 'source_sha': None}
+            if platform_image(call, tag) != actual:
+                raise RuntimeError('baseline tag identity mismatch')
+            receipt['baseline'][name] = {'index': index, 'image_id': actual,
+                'container_image': container_image, 'descriptor': descriptor, 'tag': tag, 'source_sha': None}
         receipt['stage'] = 'build'
         resource_check()
         # Compose build must not read runtime secrets from the site's .env.
@@ -106,7 +139,7 @@ def publish(sha, delivery, run=command, get=None, resource_check=check_resources
         run(compose + ['--env-file', os.devnull, 'build', 'backend', 'web'], build_env)
         receipt['built'] = {}
         for name in ('backend', 'web'):
-            receipt['built'][name] = call('docker', 'image', 'inspect', '--platform', 'linux/amd64', '--format', '{{.Id}}', 'personal-site-' + name + ':' + sha)
+            receipt['built'][name] = platform_image(call, 'personal-site-' + name + ':' + sha)
         if g('rev-parse', 'HEAD') != sha or g('status', '--porcelain'):
             raise RuntimeError('checkout changed during build')
         receipt['stage'] = 'replace'
@@ -117,10 +150,11 @@ def publish(sha, delivery, run=command, get=None, resource_check=check_resources
         receipt['running'] = {}
         for name in ('backend', 'web'):
             cid = run(compose + ['ps', '-q', name], env)
-            actual = json.loads(call('docker', 'inspect', '--format', '{{json .ImageManifestDescriptor}}', cid))['digest']
+            actual, container_image, descriptor = running_image(call, cid)
             if actual != receipt['built'][name]:
-                raise RuntimeError('running manifest mismatch')
-            receipt['running'][name] = {'container': cid, 'manifest': actual}
+                raise RuntimeError('running image identity mismatch')
+            receipt['running'][name] = {'container': cid, 'image_id': actual,
+                'container_image': container_image, 'descriptor': descriptor}
         backend = receipt['running']['backend']['container']
         mounts = json.loads(call('docker', 'inspect', '--format', '{{json .Mounts}}', backend))
         if not any(m.get('Name') == 'personal-site_site-data' and m.get('Destination') == '/data' for m in mounts):

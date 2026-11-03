@@ -8,6 +8,7 @@ import hmac
 import http.client
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import socket
@@ -15,6 +16,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import threading
 import urllib.request
 
 SRC = Path(__file__).resolve().parents[1]
@@ -29,6 +31,20 @@ SECRET = 'synthetic-hmac-ci-only-nonproduction'
 SHARE_SECRET = 'synthetic-share-ci-only-nonproduction'
 VOLUME = 'personal-site_site-data'
 STEPS=[]
+SAMPLES=[]
+STOP=threading.Event()
+
+
+def sample_resources():
+    prior=None
+    while not STOP.is_set():
+        mem={k:int(v.split()[0])*1024 for k,v in (line.split(':',1) for line in Path('/proc/meminfo').read_text().splitlines()) if k in ('MemTotal','MemAvailable','SwapTotal','SwapFree')}
+        cpu=list(map(int,Path('/proc/stat').read_text().splitlines()[0].split()[1:9]))
+        total,idle=sum(cpu),cpu[3]+cpu[4]
+        row={'at':time.time(), 'memory_used':mem['MemTotal']-mem['MemAvailable'], 'mem_available':mem['MemAvailable'],
+             'swap_used':mem['SwapTotal']-mem['SwapFree'],'disk_free':shutil.disk_usage('/').free}
+        if prior and total>prior[0]:row['cpu_percent']=100*(1-(idle-prior[1])/(total-prior[0]))
+        prior=(total,idle);SAMPLES.append(row);STOP.wait(1)
 
 
 def run(*args,cwd=None,env=None,timeout=200):
@@ -56,7 +72,7 @@ def failsafe():
     assert run('docker','info','--format','{{.OSType}}')=='linux'
     assert int(run('id','-u'))==0
     assert run('docker','info','--format','{{.Name}}')
-    record('isolated-runner',pid1='systemd',docker_root=run('docker','info','--format','{{.DockerRootDir}}'))
+    record('isolated-runner',pid1='systemd',docker_root=run('docker','info','--format','{{.DockerRootDir}}'),docker_version=run('docker','version','--format','{{.Server.Version}}'),buildx=run('docker','buildx','version'))
 
 
 def site_files(version, path):
@@ -273,9 +289,39 @@ def exercise():
     assert b'synthetic bravo' in html
     assert health_status()==503, 'rollback must NOT silently clear uncertain release ledger'
     record('real-image-rollback',rollback_target=sha1,site_data_preserved=True,controller_still_quarantined=True)
+    # Keep the actual receipts, not just a PASS label.
+    Path('/tmp/r3b-receipts.json').write_text(json.dumps(rows(),indent=2))
+    cancel_build(sentinel)
+
+
+def cancel_build(sentinel):
+    context=Path('/tmp/r3b-cancel');context.mkdir()
+    (context/'Dockerfile').write_text('FROM python:3.12-alpine\nRUN echo R3_CANCEL_STARTED; sleep 45; echo R3_CANCEL_COMPLETED\n')
+    before={r['ID'] for r in json.loads(run('docker','buildx','history','ls','--format','json'))}
+    sys.path.insert(0,str(INSTALL))
+    import controller
+    child_code="import sys;sys.path.insert(0,"+repr(str(INSTALL))+");import executor;executor.command(['docker','buildx','build','--no-cache','--progress=plain','--load','-t','r3b-cancel:never-ready',"+repr(str(context))+"],executor.clean_environment())"
+    try:controller.child([sys.executable,'-c',child_code],7)
+    except TimeoutError:pass
+    else:raise RuntimeError('slow synthetic build was not interrupted')
+    for _ in range(30):
+        records=[r for r in json.loads(run('docker','buildx','history','ls','--format','json')) if r['ID'] not in before]
+        if records and all('running' not in r['Status'].lower() for r in records):break
+        time.sleep(.5)
+    assert len(records)==1,records
+    logs=run('docker','buildx','history','logs',records[0]['ID'])
+    Path('/tmp/r3b-buildkit-cancel.log').write_text(logs)
+    assert re.search(r'(?m)^#\d+\s+[0-9.]+\s+R3_CANCEL_STARTED\s*$',logs),logs
+    assert not re.search(r'(?m)^#\d+\s+[0-9.]+\s+R3_CANCEL_COMPLETED\s*$',logs),logs
+    assert re.search(r'(?im)^.*(?:CANCELED|context canceled|context cancelled)',logs),records
+    assert records[0]['Status'].lower() not in ('running','completed','success'),records
+    assert not run('docker','image','ls','-q','r3b-cancel:never-ready')
+    sentinel_check(sentinel);assert run('docker','info','--format','{{.OSType}}')=='linux'
+    record('real-buildkit-cancel',record=records[0],logs_sha256=hashlib.sha256(logs.encode()).hexdigest(),no_exported_image=True,daemon_alive=True)
 
 
 def main():
+    monitor=threading.Thread(target=sample_resources,daemon=True);monitor.start()
     try:
         failsafe();exercise()
         print('R3_LINUX_B_CORE_PASS: real Docker replacement, real systemd persistence, real rollback, synthetic volume.',flush=True)
@@ -287,6 +333,8 @@ def main():
         except Exception:pass
         raise
     finally:
-        Path('/tmp/r3b-result.json').write_text(json.dumps({'core_pass':all(x['result']=='PASS' for x in STEPS) and any(x['step']=='real-image-rollback' for x in STEPS), 'steps':STEPS},indent=2))
+        STOP.set();monitor.join(3)
+        Path('/tmp/r3b-result.json').write_text(json.dumps({'core_pass':all(x['result']=='PASS' for x in STEPS) and any(x['step']=='real-buildkit-cancel' for x in STEPS), 'steps':STEPS,
+            'resource_peak':{'memory_used':max((r['memory_used'] for r in SAMPLES),default=0),'cpu_percent':max((r.get('cpu_percent',0) for r in SAMPLES),default=0),'swap_used':max((r['swap_used'] for r in SAMPLES),default=0),'disk_free_min':min((r['disk_free'] for r in SAMPLES),default=0)},'samples':SAMPLES},indent=2))
 
 if __name__=='__main__':main()

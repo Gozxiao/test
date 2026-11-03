@@ -25,12 +25,16 @@ jobs:
           RUNNER_LABELS_JSON: '["ubuntu-24.04"]'
         run: |
           set -euo pipefail
+          python3 -B -m unittest discover -s r3 -p test_image_identity.py -v
           sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_LABELS_JSON python3 test/b_acceptance.py
       - name: Preserve synthetic evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: r3-b-synthetic-evidence
-          path: /tmp/r3b-result.json
+          path: |
+            /tmp/r3b-result.json
+            /tmp/r3b-receipts.json
+            /tmp/r3b-buildkit-cancel.log
           if-no-files-found: warn
           retention-days: 7

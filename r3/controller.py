@@ -43,7 +43,8 @@ def replacement_unconfirmed(result):
         and type(result.get('assets_checked')) is int and result['assets_checked'] > 0
         and isinstance(built, dict) and isinstance(running, dict)
         and all(isinstance(built.get(n), str) and bool(built[n])
-                and isinstance(running.get(n), dict) and running[n].get('manifest') == built[n]
+                and isinstance(running.get(n), dict)
+                and running[n].get('image_id', running[n].get('manifest')) == built[n]
                 for n in ('backend', 'web')))
     return not confirmed
 
